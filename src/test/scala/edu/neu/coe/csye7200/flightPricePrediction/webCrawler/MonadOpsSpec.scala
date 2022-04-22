@@ -18,6 +18,7 @@ import org.scalatest.concurrent.{Futures, ScalaFutures}
 import org.scalatest.flatspec
 import org.scalatest.matchers.should
 
+import scala.collection.compat.immutable.LazyList
 import scala.concurrent.Future
 import scala.util.{Failure, Success, Try}
 

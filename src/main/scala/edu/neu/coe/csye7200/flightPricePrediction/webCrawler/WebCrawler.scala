@@ -1,100 +1,119 @@
 package edu.neu.coe.csye7200.flightPricePrediction.webCrawler
 
-import java.net.URL
+import com.neu.edu.FlightPricePrediction.db.MongoDBUtils
+import com.neu.edu.FlightPricePrediction.db.MongoDBUtils.insertManyFlights
+import edu.neu.coe.csye7200.flightPricePrediction.webCrawler.constant.Constants._
+import org.slf4j.{Logger, LoggerFactory}
+
+import java.text.SimpleDateFormat
+import java.util.Calendar
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent._
-import  scala.concurrent.duration._
-import scala.io.{BufferedSource, Source}
+import scala.concurrent.duration.Duration
+import scala.io.Source
 import scala.language.postfixOps
 import scala.util._
 import scala.util.control.NonFatal
-import scala.xml.Node
 
-/**
-  * @author scalaprof
+/** @author scalaprof
   */
 object WebCrawler extends App {
+  val logger: Logger = LoggerFactory.getLogger(getClass.getSimpleName)
 
-  def getURLContent(u: URL): Future[String] =
-    for {
-      s <- MonadOps.asFuture(SourceFromURL(u))
-      w <- MonadOps.asFuture(sourceToString(s, s"Cannot read from source at $u"))
-    } yield w
-
-  def wget(u: URL): Future[Seq[URL]] = {
-    // Hint: write as a for-comprehension, using the method createURL(Option[URL], String) to get the appropriate URL for relative links
-    // 16 points.
-    def getURLs(ns: Node): Seq[Try[URL]] = for (x <- ns \\ "a"; y <- x \ "@href") yield createURL(Option(u), y.text)
-
-    def getLinks(g: String): Try[Seq[URL]] = {
-      val ny = HTMLParser.parse(g) recoverWith { case f => Failure(new RuntimeException(s"parse problem with URL $u: $f")) }
-      for (n <- ny; z <- MonadOps.sequence(getURLs(n))) yield z
-    }
-    // Hint: write as a for-comprehension, using getURLContent (above) and getLinks above. You might also need MonadOps.asFuture
-    // 9 points.
-    println("Start to wget", u)
-    for {
-      s <- getURLContent(u)
-      x <- MonadOps.asFuture(getLinks(s))
-    } yield x
+  def generateTasks: (Seq[String], Seq[String], Seq[String]) = {
+    val cities = Source.fromResource(CANDIDATE_CITIES).mkString.split("\n")
+    val cs = for {
+      a <- cities; b <- cities
+    } yield (a, b)
+    val dates = for (n <- 0 to 1) yield getNextFewDay(n)
+    Tuple3(
+      cs.filter(x => x._1 != x._2).map(_._1),
+      cs.filter(x => x._1 != x._2).map(_._2),
+      dates
+    )
   }
 
-  def wget(us: Seq[URL]): Future[Seq[Either[Throwable, Seq[URL]]]] = {
-    val us2 = us.distinct take 10
-    // Hint: Use wget(URL) (above). MonadOps.sequence and Future.sequence are also available to you to use.
-    // 15 points. Implement the rest of this, based on us2 instead of us.
-    // TO BE IMPLEMENTED
-    val seq_p:Seq[Future[Either[Throwable, Seq[URL]]]] = for {
-      u: URL <- us2
-    } yield MonadOps.sequence(wget(u): Future[Seq[URL]]): Future[Either[Throwable, Seq[URL]]]
-    Future.sequence(seq_p)
+  def getNextFewDay(num: Int): String = {
+    val date = Calendar.getInstance()
+    val sdf = new SimpleDateFormat("yyyy-MM-dd")
+    date.add(Calendar.DATE, num)
+    sdf.format(date.getTime)
   }
 
-  def crawler(depth: Int, us: Seq[URL]): Future[Seq[URL]] = {
-    def inner(urls: Seq[URL], depth: Int, accum: Seq[URL]): Future[Seq[URL]] =
-      if (depth > 0)
-        for (us <- MonadOps.flattenRecover(wget(urls), { x => System.err.println(s"""crawler: ignoring exception $x ${if (x.getCause != null) " with cause " + x.getCause else ""}""") }); r <- inner(us, depth - 1, accum ++: urls)) yield r
-      else
-        Future.successful(accum)
-
-    inner(us, depth, Nil)
+  def getFlight(
+      org: String,
+      dst: String,
+      d: String
+  ): Future[Seq[flightCleaned]] = {
+    for (
+      s <- MonadOps.asFuture(
+        try {
+          Success(EaseMyTrip.search(org, dst, d))
+        } catch {
+          case NonFatal(e) =>
+            Failure(
+              WebCrawlerURLException(
+                "Error when request to get flight information!",
+                e
+              )
+            )
+        }
+      )
+    ) yield s
   }
 
-  println(s"web reader: ${args.toList}")
-  val uys = for (arg <- args toList) yield getURL(arg)
-  val s = MonadOps.sequence(uys)
-  s match {
-    case Success(z) =>
-      println(s"invoking crawler on $z")
-      val f = crawler(2, z)
-      Await.ready(f, Duration("60 second"))
-      for (x <- f) println(s"Links: $x")
-    case Failure(z) => println(s"failure: $z")
+  def executeTasks(
+      orgs: Seq[String],
+      dsts: Seq[String],
+      dates: Seq[String]
+  ): Future[Seq[Either[Throwable, Seq[flightCleaned]]]] = {
+    val flights =
+      for ((org, dst) <- orgs.zip(dsts); d <- dates)
+        yield MonadOps.sequence(
+          getFlight(org, dst, d): Future[Seq[flightCleaned]]
+        )
+    Future.sequence(flights)
   }
 
-  private def sourceToString(source: BufferedSource, errorMsg: String): Try[String] =
-    try Success(source mkString) catch {
-      case NonFatal(e) => Failure(WebCrawlerURLException(errorMsg, e))
+  def crawler(
+      orgs: Seq[String],
+      dsts: Seq[String],
+      dates: Seq[String]
+  ): Future[Seq[flightCleaned]] = {
+    for (
+      us <- MonadOps.flattenRecover(
+        executeTasks(orgs, dsts, dates),
+        { x =>
+          logger.error(s"""crawler: ignoring exception $x ${if (
+            x.getCause != null
+          ) " with cause " + x.getCause
+          else ""}""")
+        }
+      )
+    ) yield us
+  }
+
+  val (orgs, dsts, dates) = generateTasks
+  val jobs: Future[Seq[flightCleaned]] = crawler(orgs, dsts, dates)
+
+  Await
+    .ready(MonadOps.sequence(jobs), Duration("60 second"))
+    .onComplete {
+      case Success(s) =>
+        s match {
+          case Left(e)   => throw e
+          case Right(fs) => insertManyFlights(fs.map(_.toFlight))
+        }
+      case Failure(e) => throw e
     }
 
-  private def getURL(resource: String): Try[URL] = createURL(null, resource)
-
-  private def createURL(context: Option[URL], resource: String): Try[URL] =
-    try Success(new URL(context.orNull, resource)) catch {
-      case NonFatal(e) =>
-        val message: String = s"""Bad URL: ${if (context.isDefined) "context: " + context else ""} resource=$resource"""
-        Failure(WebCrawlerURLException(message, e))
-    }
-
-  private def SourceFromURL(resource: URL): Try[BufferedSource] =
-    try Success(Source.fromURL(resource)) catch {
-      case NonFatal(e) => Failure(WebCrawlerURLException(s"""Cannot get source from URL: $resource""", e))
-    }
 }
 
-case class WebCrawlerURLException(url: String, cause: Throwable) extends Exception(s"Web Crawler could not decode URL: $url", cause)
+case class WebCrawlerURLException(url: String, cause: Throwable)
+    extends Exception(s"Web Crawler could not decode URL: $url", cause)
 
-case class WebCrawlerException(msg: String, cause: Throwable) extends Exception(msg, cause)
+case class WebCrawlerException(msg: String, cause: Throwable)
+    extends Exception(msg, cause)
 
 object WebCrawlerException {
   def apply(msg: String): WebCrawlerException = apply(msg, null)

@@ -3,12 +3,19 @@ package edu.neu.coe.csye7200.flightPricePrediction.webCrawler
 import scalaj.http.{Http, HttpOptions, HttpRequest, HttpResponse}
 import spray.json._
 import MyJsonParser.extract
+import com.neu.edu.FlightPricePrediction.pojo.Flight
+import constant.Constants._
+import spray.json.DefaultJsonProtocol.{StringJsonFormat, mapFormat}
 
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import scala.language.postfixOps
 import scala.util.{Failure, Success}
 
 /** @author Caspar
   * @date 2022/4/13 18:22
   */
+
 object EaseMyTrip {
 
   val urlLogin =
@@ -67,6 +74,7 @@ object EaseMyTrip {
   def flightDetailInfo(org: String, dst: String, date: String) = {
     val filter = FlightSearchFormData(org, dst, date, getToken)
     val r = requestSearch(filter).get.body.parseJson
+    val cityMap = extract(r, "A" :: Nil).convertTo[Map[String, String]]
     val dctFltDtl = extract(r, "dctFltDtl" :: Nil)
     val tps = dctFltDtl.asJsObject.fields.toList
     import MyJsonProtocol.{flightDetailFormat, flightPriceFormat}
@@ -88,24 +96,22 @@ object EaseMyTrip {
             .asJsObject
             .convertTo[flightPrice](flightPriceFormat)
         )
-    for (p <- prices) yield {
+    val fdis = for (p <- prices) yield {
       val k = p._1.parseJson.asInstanceOf[JsArray].elements.head.toString
       val ko = k.substring(1, k.length - 1)
       Tuple3(ko, fdm.get(ko), p._2)
     }
+    (fdis, cityMap)
   }
 
-  def getPrice(org: String, dst: String, date: String) = {
-    val t3 = flightDetailInfo(org, dst, date)
-    t3.filter(x => x._2.nonEmpty).map { e =>
-      (e._2, e._3.TF) match {
-        case (
-              Some(flightDetail(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o)),
-              p
-            ) =>
-          Tuple16(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p)
-        case _ => Nil
-      }
+  def search(
+      org: String,
+      dst: String,
+      date: String
+  ): Seq[flightCleaned] = {
+    val t23 = flightDetailInfo(org, dst, date)
+    t23._1.filter(x => x._2.nonEmpty).map { e =>
+      e._2.get.clean(e._3.TF, t23._2)
     }
   }
 }
@@ -119,16 +125,6 @@ object MyJsonProtocol extends DefaultJsonProtocol {
 
 case class Account(userName: String, password: String)
 
-//case class FlightSearchFormData(org: String, dept: String, deptDT: String, TKN: String, adt: String = "1"
-//                                 , chd: String = "0", inf: String = "0", arrDT: String = null, userid: String = ""
-//                                 , IsDoubelSeat: Boolean = false, isDomestic: String = "true", isOneway: Boolean = true
-//                                 , airline: String = "undefined", Cabin: String = "0", currCode: String = "INR"
-//                                 , appType: Int = 1, isSingleView: Boolean = false, ResType: Int = 2
-//                                 , IsNBA: Boolean = true, CouponCode: String = "", IsArmedForce: Boolean = false
-//                                 , AgentCode: String = "", IsWLAPP: Boolean = false, IsFareFamily: Boolean = false
-//                                 , serviceid: String = "EMTSERVICE", serviceDepatment: String = ""
-//                                 , IpAddress: String = "", LoginKey: String = "", UUID: String = "undefined"
-//                               ) {
 case class FlightSearchFormData(
     org: String,
     dept: String,
@@ -140,7 +136,7 @@ case class FlightSearchFormData(
     |""".stripMargin
 }
 
-case class flightPrice(TF: Double, FIA: Double, TTDIS: Double)
+case class flightPrice(TF: Int, FIA: Int, TTDIS: Int)
 
 case class flightDetail(
     OG: String,
@@ -158,7 +154,114 @@ case class flightDetail(
     ATER: String,
     FlightDetailRefKey: String,
     ProviderCode: String
-)
+) {
+  override def toString: String =
+    s"flightDetail OG: $OG, DT: $DT, DDT: $DDT, ADT: $ADT, DTM: $DTM, ATM: $ATM, FN: $FN, AC: $AC, STP: $STP, CB: $CB, DUR: $DUR, DTER: $DTER, ATER: $ATER, FlightDetailRefKey: $FlightDetailRefKey, ProviderCode: $ProviderCode"
+  def categoryTime(time: String): String = {
+    val arr = time.split(":")
+    val a = arr(0).toInt
+    val b = arr(1).toInt
+    (a, b) match {
+      case (0, 0)           => "Night"
+      case (a, _) if a < 4  => "Late_Night"
+      case (4, 0)           => "Late_Night"
+      case (a, _) if a < 8  => "Early_Morning"
+      case (8, 0)           => "Early_Morning"
+      case (a, _) if a < 12 => "Morning"
+      case (12, 0)          => "Morning"
+      case (a, _) if a < 16 => "Afternoon"
+      case (16, 0)          => "Afternoon"
+      case (a, _) if a < 20 => "Evening"
+      case (20, 0)          => "Evening"
+      case (_, _)           => "Night"
+    }
+  }
+  def calculateDate(ddt: String): Int = {
+    val now = Calendar.getInstance()
+    val sdf = new SimpleDateFormat("EEE-ddMMMyyyy")
+    val nowDate = sdf.parse(sdf.format(now.getTime))
+    val departDate = sdf.parse(ddt)
+    (departDate.getTime - nowDate.getTime) / (1000 * 3600 * 24) toInt
+  }
+  def clean(price: Int, cityMap: Map[String, String]): flightCleaned = {
+    val airline = getAirLine(AC)
+    val flight = AC + "-" + FN
+    val sourceCity = cityMap.get(OG) match {
+      case Some(str) => str
+      case _ =>
+        val str = toString
+        throw new Exception(s"Data cleaning error for the flight $str!")
+    }
+    val departureTime = categoryTime(DTM)
+    val stops = STP.toInt match {
+      case 0 => "zero"
+      case 1 => "one"
+      case _ => "two_or_more"
+    }
+    val arrivalTime = categoryTime(ATM)
+    val destinationCity = cityMap.get(DT) match {
+      case Some(str) => str
+      case _ =>
+        val str = toString
+        throw new Exception(s"Data cleaning error for the flight $str!")
+    }
+    val classType = CB match {
+      case "ECONOMY" => 0
+      case _         => 1
+    }
+    val duration = {
+      val arr = DUR.split(" ")
+      arr(0)
+        .substring(0, arr(0).length - 1)
+        .toDouble + (arr(1).substring(0, arr(1).length - 1).toDouble / 60)
+    }
+    val daysLeft = calculateDate(DDT)
+    flightCleaned(
+      airline.get,
+      flight,
+      sourceCity,
+      departureTime,
+      stops,
+      arrivalTime,
+      destinationCity,
+      classType.toString,
+      duration,
+      daysLeft,
+      price
+    )
+  }
+}
+
+case class flightCleaned(
+    airline: String,
+    flight: String,
+    sourceCity: String,
+    departureTime: String,
+    stops: String,
+    arrivalTime: String,
+    destinationCity: String,
+    classType: String,
+    duration: Double,
+    daysLeft: Int,
+    price: Int
+) {
+  def toFlight: Flight = {
+    new Flight(
+      0,
+      airline,
+      flight,
+      sourceCity,
+      departureTime,
+      stops,
+      arrivalTime,
+      destinationCity,
+      classType,
+      duration,
+      daysLeft,
+      price
+    )
+  }
+}
 
 case class ResponseLogin(
     Status: String,

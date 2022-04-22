@@ -5,7 +5,7 @@ import org.scalatest.flatspec
 import org.scalatest.matchers.should
 
 import java.text.SimpleDateFormat
-import java.util.{Calendar, Date}
+import java.util.Calendar
 
 /** @author Caspar
   * @date 2022/4/13 18:46
@@ -24,9 +24,10 @@ class EaseMyTripSpec
   behavior of "flight search"
   it should "work" in {
     val cal = Calendar.getInstance();
-    cal.add(Calendar.MONTH, 1); // next month
+    cal.add(Calendar.MONTH, 1) // next month
     val sdf = new SimpleDateFormat("yyyy-MM-dd")
-    val prices = EaseMyTrip.getPrice("BOM", "DEL", sdf.format(cal.getTime))
+    val prices = EaseMyTrip.search("BOM", "DEL", sdf.format(cal.getTime))
+
     assert(prices.size > 0)
   }
 }
