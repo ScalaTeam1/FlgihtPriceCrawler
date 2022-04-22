@@ -1,6 +1,5 @@
 package edu.neu.coe.csye7200.flightPricePrediction.webCrawler
 
-import com.neu.edu.FlightPricePrediction.db.MongoDBUtils
 import com.neu.edu.FlightPricePrediction.db.MongoDBUtils.insertManyFlights
 import edu.neu.coe.csye7200.flightPricePrediction.webCrawler.constant.Constants._
 import org.slf4j.{Logger, LoggerFactory}
@@ -20,8 +19,8 @@ import scala.util.control.NonFatal
 object WebCrawler extends App {
   val logger: Logger = LoggerFactory.getLogger(getClass.getSimpleName)
 
-  def generateTasks: (Seq[String], Seq[String], Seq[String]) = {
-    val cities = Source.fromResource(CANDIDATE_CITIES).mkString.split("\n")
+  def generateTasks(source: String): (Seq[String], Seq[String], Seq[String]) = {
+    val cities = Source.fromResource(source).mkString.split("\n")
     val cs = for {
       a <- cities; b <- cities
     } yield (a, b)
@@ -93,20 +92,13 @@ object WebCrawler extends App {
     ) yield us
   }
 
-  val (orgs, dsts, dates) = generateTasks
+  val (orgs, dsts, dates) = generateTasks(CANDIDATE_CITIES)
   val jobs: Future[Seq[flightCleaned]] = crawler(orgs, dsts, dates)
 
-  Await
-    .ready(MonadOps.sequence(jobs), Duration("60 second"))
-    .onComplete {
-      case Success(s) =>
-        s match {
-          case Left(e)   => throw e
-          case Right(fs) => insertManyFlights(fs.map(_.toFlight))
-        }
-      case Failure(e) => throw e
-    }
-
+  val result: Seq[flightCleaned] = Await.result(jobs, Duration("60 second"))
+  logger.info(s"Start to insert ${result.size} flights")
+  insertManyFlights(result.map(_.toFlight))
+  logger.info(s"Succeed to insert ${result.size} flights")
 }
 
 case class WebCrawlerURLException(url: String, cause: Throwable)
