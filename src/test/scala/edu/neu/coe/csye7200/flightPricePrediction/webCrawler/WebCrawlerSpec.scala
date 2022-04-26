@@ -5,7 +5,6 @@ import edu.neu.coe.csye7200.flightPricePrediction.webCrawler.WebCrawler.{
   crawler,
   generateTasks
 }
-import edu.neu.coe.csye7200.flightPricePrediction.webCrawler.constant.Constants.CANDIDATE_CITIES_EXAMPLE
 import org.scalatest._
 import org.scalatest.concurrent.{Futures, ScalaFutures}
 import org.scalatest.flatspec.AnyFlatSpec
@@ -27,7 +26,7 @@ class WebCrawlerSpec
 
   behavior of "web crawler"
   it should "work" in {
-    val (orgs, dsts, dates) = generateTasks(CANDIDATE_CITIES_EXAMPLE)
+    val (orgs, dsts, dates) = generateTasks
     val jobs: Future[Seq[flightCleaned]] = crawler(orgs, dsts, dates)
 
     whenReady(MonadOps.sequence(jobs), timeout(Span(60, Seconds))) {
