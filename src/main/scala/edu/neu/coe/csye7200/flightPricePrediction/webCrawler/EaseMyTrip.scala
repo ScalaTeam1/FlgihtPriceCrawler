@@ -4,7 +4,7 @@ import scalaj.http.{Http, HttpOptions, HttpRequest, HttpResponse}
 import spray.json._
 import MyJsonParser.extract
 import com.neu.edu.FlightPricePrediction.pojo.Flight
-import constant.Constants._
+import edu.neu.coe.csye7200.flightPricePrediction.webCrawler.configure.CrawlerContext._
 import spray.json.DefaultJsonProtocol.{StringJsonFormat, mapFormat}
 
 import java.text.SimpleDateFormat
@@ -109,6 +109,7 @@ object EaseMyTrip {
       dst: String,
       date: String
   ): Seq[flightCleaned] = {
+    logger.info(s"Start to search for flights from $org to $dst at $date")
     val t23 = flightDetailInfo(org, dst, date)
     t23._1.filter(x => x._2.nonEmpty).map { e =>
       e._2.get.clean(e._3.TF, t23._2)

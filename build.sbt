@@ -33,3 +33,7 @@ libraryDependencies ++= Seq(
 )
 
 unmanagedBase := baseDirectory.value / "lib"
+
+mainClass in (Compile, run) := Some(
+  "edu.neu.coe.csye7200.flightPricePrediction.webCrawler.WebCrawler"
+)

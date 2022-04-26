@@ -1,15 +1,15 @@
 package edu.neu.coe.csye7200.flightPricePrediction.webCrawler
 
-import com.neu.edu.FlightPricePrediction.db.MongoDBUtils.insertManyFlights
-import edu.neu.coe.csye7200.flightPricePrediction.webCrawler.constant.Constants._
+import edu.neu.coe.csye7200.flightPricePrediction.webCrawler.configure.CrawlerContext._
 import org.slf4j.{Logger, LoggerFactory}
+import com.neu.edu.FlightPricePrediction.db.MongoDBUtils
+import com.neu.edu.FlightPricePrediction.pojo.FlightWithDate
 
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent._
 import scala.concurrent.duration.Duration
-import scala.io.Source
 import scala.language.postfixOps
 import scala.util._
 import scala.util.control.NonFatal
@@ -19,12 +19,11 @@ import scala.util.control.NonFatal
 object WebCrawler extends App {
   val logger: Logger = LoggerFactory.getLogger(getClass.getSimpleName)
 
-  def generateTasks(source: String): (Seq[String], Seq[String], Seq[String]) = {
-    val cities = Source.fromResource(source).mkString.split("\n")
+  def generateTasks: (Seq[String], Seq[String], Seq[String]) = {
     val cs = for {
-      a <- cities; b <- cities
+      a <- candidate_cities; b <- candidate_cities
     } yield (a, b)
-    val dates = for (n <- 0 to 1) yield getNextFewDay(n)
+    val dates = for (n <- 0 to daysToCrawl) yield getNextFewDay(n)
     Tuple3(
       cs.filter(x => x._1 != x._2).map(_._1),
       cs.filter(x => x._1 != x._2).map(_._2),
@@ -92,12 +91,14 @@ object WebCrawler extends App {
     ) yield us
   }
 
-  val (orgs, dsts, dates) = generateTasks(CANDIDATE_CITIES)
+  val (orgs, dsts, dates) = generateTasks
   val jobs: Future[Seq[flightCleaned]] = crawler(orgs, dsts, dates)
 
   val result: Seq[flightCleaned] = Await.result(jobs, Duration("60 second"))
   logger.info(s"Start to insert ${result.size} flights")
-  insertManyFlights(result.map(_.toFlight))
+  MongoDBUtils.insertManyFlightWithDates(
+    result.map(_.toFlight).map(FlightWithDate.toFlightWithDate)
+  )
   logger.info(s"Succeed to insert ${result.size} flights")
 }
 

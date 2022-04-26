@@ -1,0 +1,1 @@
+docker build . -f docker/DockerfileCrawler -t csye7200-crawler:1.3
