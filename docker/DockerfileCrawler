@@ -8,4 +8,4 @@ USER root
 COPY . /app
 WORKDIR ./app
 
-ENTRYPOINT ["bash", "-lc"]
+ENTRYPOINT ["sbt", "run"]
